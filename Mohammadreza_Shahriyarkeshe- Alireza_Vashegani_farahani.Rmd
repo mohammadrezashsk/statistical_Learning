@@ -1,0 +1,480 @@
+---
+title: "SML_project"
+author: "Mohammadreza shahriyarkeshe & Alireza Vashegani farahani"
+date: "2026-02-15"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# Part 1. Data Exploration and Feature Selections
+## Load neccesary libraries
+```{r}
+# install.packages(c("randomForest", "e1071", "class" , "tidyverse" , "ggplot2" , "caret" , "glmnet" ,"pROC"))
+set.seed(123) 
+library(tidyverse)
+library(ggplot2)
+library(caret)
+library(glmnet)
+library(ggplot2)
+library(class)
+library(pROC)
+library(randomForest)
+library(e1071)
+```
+
+
+
+
+## Load the dataset
+
+```{r}
+df <- read.csv("METABRIC_RNA_Mutation.csv") 
+head(df)
+```
+## Perform exploratory data analysis:
+
+Clean the data, handle missing values, and explore the data structure using dimensionality reduction techniques.
+
+Question requirements:
+Pre-processing: remove incomplete rows, perform imputation(for handle missing values), and apply PCA.
+
+*Visualize missing values*
+```{r}
+missing_columns=which(colSums(is.na(df))!=0)
+print(missing_columns)
+#Missing value per column
+sum(is.na(df))
+#Overall
+```
+```{r}
+barplot(missing_columns)
+```
+
+
+```{r}
+df_clean <- df %>% filter(death_from_cancer != "" & !is.na(death_from_cancer))
+#Remove rows which don't have  target value
+
+
+df_clean$patient_id <- NULL
+#Remove id column
+
+summary(df_clean[, 1:10])
+```
+Separate numeric columns for co analysis and pca then impute missing values with mean
+```{r}
+numeric_cols <- df_clean %>% select_if(is.numeric)
+numeric_cols_imputed <- as.data.frame(lapply(numeric_cols, function(x) {
+  if(any(is.na(x))) { x[is.na(x)] <- mean(x, na.rm = TRUE) }
+  return(x)
+}))
+```
+
+
+*Factorize target column*
+```{r}
+df_plot <- df_clean %>%
+  filter(!is.na(overall_survival) & overall_survival != "") %>%
+  mutate(overall_survival = as.factor(overall_survival))
+```
+Distribution of some features colored by overall_survival(0 or 1)
+*age*
+```{r,echo=FALSE}
+ggplot(df_plot, aes(x = age_at_diagnosis, fill = overall_survival)) +
+  geom_histogram(bins = 30, alpha = 0.6, position = "identity") +
+  theme_minimal() +
+  labs(title = "Age Distribution by Survival Label", x = "Age", fill = "Survival Status")
+```
+*Tumor Size*
+```{r,echo=FALSE}
+ggplot(df_plot, aes(x = tumor_size, fill = overall_survival)) +
+  geom_density(alpha = 0.5) +
+  theme_minimal() +
+  labs(title = "Tumor Size Distribution by Survival Label", x = "Tumor Size", fill = "Survival Status")
+```
+*nottingham prognostic index*
+```{r,echo=FALSE}
+ggplot(df_plot, aes(x = nottingham_prognostic_index, fill = overall_survival)) +
+  geom_density(alpha = 0.5) +
+  theme_minimal() +
+  labs(title = "distribution of nottingham prognostic index", x = "nottingham prognostic index")
+```
+
+*lymph nodes examined positive*
+```{r,echo=FALSE}
+ggplot(df_plot, aes(x = lymph_nodes_examined_positive, fill = overall_survival)) +
+  geom_histogram(bins = 30, alpha = 0.6, position = "identity") +
+  theme_minimal() +
+  labs(title = "distribution of lymph nodes examined positive", x = "lymph nodes examined positive")
+```
+*gsk3b*
+```{r,echo=FALSE}
+ggplot(df_plot, aes(x = gsk3b, fill = overall_survival)) +
+  geom_density(alpha = 0.5) +
+  theme_minimal() +
+  labs(title = "distribution of gsk3b", x = "gsk3b")
+```
+*akt1*
+```{r,echo=FALSE}
+ggplot(df_plot, aes(x = akt1, fill = overall_survival)) +
+  geom_density(alpha = 0.5) +
+  theme_minimal() +
+  labs(title = "distribution of akt1", x = "akt1")
+```
+*ugt2b15*
+```{r,echo=FALSE}
+ggplot(df_plot, aes(x = ugt2b15, fill = overall_survival)) +
+  geom_density(alpha = 0.5) +
+  theme_minimal() +
+  labs(title = "distribution of ugt2b15", x = "ugt2b15")
+```
+*tumor_stage*
+```{r,echo=FALSE}
+ggplot(df_plot, aes(x = tumor_stage, fill = overall_survival)) +
+  geom_histogram(bins = 30, alpha = 0.6, position = "identity") +
+  theme_minimal() +
+  labs(title = "distribution of tumor stage", x = "tumor stage")
+```
+
+Correlation Analysis
+
+```{r}
+cor_matrix <- cor(numeric_cols_imputed)
+highly_correlated <- findCorrelation(cor_matrix, cutoff = 0.9)
+
+heatmap(cor_matrix)
+```
+
+Remove highly correlated features.
+```{r}
+if(length(highly_correlated) > 0){
+  df_final_numeric <- numeric_cols_imputed[, -highly_correlated]
+  print(paste("Number of features removed due to high correlation (>0.9):", length(highly_correlated)))
+} else {
+  df_final_numeric <- numeric_cols_imputed
+  print("No highly correlated features found.")
+}
+```
+
+Number of features removed due to high correlation (>0.9):
+```{r}
+highly_correlated
+length(highly_correlated)
+```
+```{r}
+ncol(df)
+ncol(df_final_numeric)
+```
+
+
+
+
+normalize dataframe then apply PCA
+```{r}
+#scale Data
+df_scaled <- scale(df_final_numeric)
+
+#PCA
+pca_res <- prcomp(df_scaled, scale. = FALSE) 
+pca_df <- as.data.frame(pca_res$x[, 1:2]) # 2D
+pca_df$Target <- as.factor(df_clean$overall_survival)
+```
+
+*2 dimension PCA plot colored by overall survival label*
+```{r}
+ggplot(pca_df, aes(x = PC1, y = PC2, color = Target)) +
+  geom_point(alpha = 0.5) +
+  theme_minimal() +
+  labs(title = "PCA: 2D Projection of Data",
+       subtitle = "Coloring by Target Label (Alive vs Dead)",
+       x = "Principal Component 1", y = "Principal Component 2")
+```
+
+According to the above plot, no clear separation can be observed; therefore, to achieve better class prediction, it is preferable to incorporate additional auxiliary variables.
+```{r}
+#Final data
+final_data <- data.frame(df_final_numeric, death_from_cancer = df_clean$death_from_cancer)
+```
+
+# Part 2: Baseline Classification Models (Lasso & Ridge)
+
+```{r}
+#Turn target column to binary type
+df_binary <- df_clean %>%
+  filter(death_from_cancer %in% c("Died of Disease", "Living")) %>%
+  mutate(death_from_cancer = factor(death_from_cancer))
+
+y <- df_binary$death_from_cancer
+```
+
+
+*Remove features with Var=0 or Leakage(A function from target column) *
+```{r}
+leakage_cols <- c("overall_survival_months", "overall_survival", "vital_status", 
+                  "death_from_cancer", "patient_id")
+
+X_all <- df_binary %>% 
+  select(-one_of(intersect(names(.), leakage_cols))) %>% 
+  select_if(is.numeric) %>%
+  select(which(apply(., 2, var, na.rm=TRUE) > 0))
+```
+
+Imputation missing value with mean
+```{r}
+
+X_all <- as.data.frame(lapply(X_all, function(x) {
+  x[is.na(x)] <- mean(x, na.rm = TRUE)
+  return(x)
+}))
+```
+
+Separate features to  non-genetic, genetic and both.
+```{r}
+clinical_features <- names(X_all)[1:min(31, ncol(X_all))]
+genetic_features  <- names(X_all)[(min(31, ncol(X_all))+1):ncol(X_all)]
+
+feature_subsets <- list(
+  "Clinical_Only" = clinical_features,
+  "Genetic_Only"  = genetic_features,
+  "Combined"      = names(X_all)
+)
+```
+
+Stratified Split dataset to train-test
+```{r}
+train_idx <- createDataPartition(y, p = 0.8, list = FALSE)
+X_train <- X_all[train_idx, ]
+X_test  <- X_all[-train_idx, ]
+y_train <- y[train_idx]
+y_test  <- y[-train_idx]
+```
+
+Create a function for report model metrics Accuracy,AUC,.. 
+```{r}
+evaluate_model <- function(model, X_test, y_test) {
+  probs <- predict(model, s = "lambda.min", newx = X_test, type = "response")
+  preds <- predict(model, s = "lambda.min", newx = X_test, type = "class")
+  
+  cm <- confusionMatrix(as.factor(preds), y_test)
+  
+  
+  acc <- cm$overall['Accuracy']
+  precision <- cm$byClass['Pos Pred Value'] # Precision
+  recall    <- cm$byClass['Sensitivity']    # Recall
+  f1 <- 2 * (precision * recall) / (precision + recall)
+  roc_auc <- auc(roc(y_test, as.vector(probs), quiet = TRUE))
+  
+  return(list(Accuracy = acc, AUC = roc_auc, F1 = f1, Precision = precision, Recall = recall))
+}
+```
+*Lasso  Ridge for feature subsets*
+```{r}
+results_list <- list()
+
+for(subset_name in names(feature_subsets)) {
+  cols <- feature_subsets[[subset_name]]
+  
+
+  X_train_sub <- as.matrix(X_all[train_idx, cols])
+  X_test_sub  <- as.matrix(X_all[-train_idx, cols])
+  y_train_sub <- y[train_idx]
+  y_test_sub  <- y[-train_idx]
+  
+  # 5-fold CV Lasso :
+  cv_lasso <- cv.glmnet(X_train_sub, y_train_sub, family = "binomial", alpha = 1, nfolds = 5)
+  res_lasso <- evaluate_model(cv_lasso, X_test_sub, y_test_sub)
+  
+  # 5-fold CV Ridge :
+  cv_ridge <- cv.glmnet(X_train_sub, y_train_sub, family = "binomial", alpha = 0, nfolds = 5)
+  res_ridge <- evaluate_model(cv_ridge, X_test_sub, y_test_sub)
+  
+  #save results
+  results_list[[paste0(subset_name, "_Lasso")]] <- res_lasso
+  results_list[[paste0(subset_name, "_Ridge")]] <- res_ridge
+}
+```
+*Coparison Table  :*
+```{r}
+comparison_df <- do.call(rbind, lapply(results_list, as.data.frame))
+print(comparison_df)
+```
+Based on the above results, we conclude that a combination of genetic and non-genetic features leads to a better model. Furthermore, we observe that LASSO performs better than Bridge because LASSO eliminates less important features.
+```{r}
+# Best Coef in Lasso on combined model 
+best_lasso_coefs <- coef(cv_lasso, s = "lambda.min")
+important_features <- as.matrix(best_lasso_coefs)
+important_features <- important_features[important_features != 0, , drop=FALSE]
+print(head(important_features, 20))
+
+```
+# Part 3: Ensemble and Nonlinear Models - FULLY COMPLIANT
+```{r}
+# 5-fold CV :
+ctrl <- trainControl(method = "cv", number = 5, 
+                     classProbs = TRUE, 
+                     summaryFunction = twoClassSummary,
+                     savePredictions = "final")
+#Use caret library for c-v
+
+subsets <- list(
+  Clinical = clinical_features,
+  Genetic = genetic_features,
+  Combined = names(X_all)
+)
+# Feature_subsets
+```
+Make syntactically valid names out of character vectors for train/test.
+```{r}
+y_train_f <- make.names(y_train)
+y_test_f  <- make.names(y_test)
+
+final_results_p3 <- data.frame()
+```
+
+
+*Train models with tuned hyperparameters for all models*
+```{r}
+for(s_name in names(subsets)){
+  cols <- subsets[[s_name]]
+  
+  #Random Forest :
+  print(paste("Tuning RF for:", s_name))
+  rf_tuned <- train(x = X_train[, cols], y = y_train_f,
+                    method = "rf",
+                    ntree = 100,
+                    trControl = ctrl,
+                    metric = "ROC",
+                    tuneGrid = expand.grid(mtry = c(2, 5, 10)))
+  
+  # SVM
+  print(paste("Tuning SVM for:", s_name))
+  svm_tuned <- train(x = X_train[, cols], y = y_train_f,
+                     method = "svmRadial",
+                     trControl = ctrl,
+                     metric = "ROC",
+                     tuneLength = 5)
+  
+  # KNN
+  print(paste("Tuning KNN for:", s_name))
+  knn_tuned <- train(x = X_train[, cols], y = y_train_f,
+                     method = "knn",
+                     trControl = ctrl,
+                     metric = "ROC",
+                     tuneGrid = expand.grid(k = c(3, 5, 7, 9)))
+  # Decision Tree
+  print(paste("Tuning Decision Tree for:", s_name))
+  dt_tuned <- train(x = X_train[, cols], y = y_train_f,
+                    method = "rpart", trControl = ctrl,
+                    metric = "ROC", tuneLength = 10)
+  # AdaBoost 
+  print(paste("Tuning AdaBoost for:", s_name))
+  ada_tuned <- train(x = X_train[, cols], y = y_train_f,
+                     method = "gbm", trControl = ctrl,
+                     metric = "ROC", verbose = FALSE)
+  temp_models <- list(RF=rf_tuned, SVM=svm_tuned, KNN=knn_tuned, DT=dt_tuned, AdaBoost=ada_tuned)
+  
+  for(m_name in names(temp_models)){
+    m <- temp_models[[m_name]]
+    # besr result in CV
+    best_row <- m$results[which.max(m$results$ROC), ]
+    
+    # Test on hold-out dataset (test)
+    preds <- predict(m, newdata = X_test[, cols])
+    cm <- confusionMatrix(preds, as.factor(y_test_f))
+    
+    # report :
+    new_row <- data.frame(
+      Subset = s_name,
+      Model = m_name,
+      ROC_Mean = best_row$ROC,
+      ROC_SD = best_row$ROCSD,
+      Accuracy = cm$overall['Accuracy']
+    )
+    final_results_p3 <- rbind(final_results_p3, new_row)
+  }
+}
+```
+```{r}
+# Comparison Table
+print(final_results_p3)
+```
+Based on the above results, the AdaBoost on Combined feature subset  model performs better than the other models(High Roc mean and less ROC std)
+all models work better in combined feature subset.
+
+## Best 
+1 : combind adaboost
+2 : combind svm
+3 : clinical rf
+
+# Part 4: Model Evaluation, Comparison, and Interpretation (SHAP)
+```{r}
+#Global comparision
+final_summary_table <- final_results_p3 %>%
+  select(Subset, Model, ROC_Mean, ROC_SD, Accuracy) %>%
+  arrange(desc(ROC_Mean))
+
+print(final_summary_table)
+```
+
+Choose best model base on Accuracy
+```{r}
+# best model ada_tunes
+best_model_fit <- ada_tuned
+```
+
+```{r}
+#sample = 5 -> lack of resource 
+X_sample <- X_train[sample(1:nrow(X_train), 5), subsets$Combined] 
+
+
+p_function_fixed <- function(object, newdata) {
+
+  results <- predict(object, newdata = newdata, type = "prob")
+  return(results[, grep("Living", colnames(results))])
+}
+
+
+#predict function
+```
+
+```{r}
+library(fastshap)
+shap_values <- explain(
+  object = best_model_fit, 
+  X = X_sample, 
+  pred_wrapper = p_function_fixed,
+  nsim = 2
+)
+#calculating shap
+```
+
+*Create a data from show importance(SHAP value) per feature in our best model(adaboost)*
+```{r}
+shap_imp_data <- data.frame(
+  Feature = colnames(X_sample),
+  Importance = colMeans(abs(shap_values))
+) %>% arrange(desc(Importance))
+```
+
+*Plot histogram importance(SHAP value) per feature in our best model(adaboost)*
+```{r,echo=FALSE}
+ggplot(shap_imp_data[1:15, ], aes(x = reorder(Feature, Importance), y = Importance)) +
+  geom_bar(stat = "identity", fill = "orange") +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "Final SHAP Interpretation (Fixed)",
+       subtitle = "Contribution of each feature to the survival prediction",
+       x = "Features", y = "Mean |SHAP Value|")
+```
+*Plot test accuracy of each model in all subsets.*
+```{r,echo=FALSE}
+ggplot(final_summary_table, aes(x = reorder(paste(Model, Subset), Accuracy), y = Accuracy, fill = Subset)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "Final Accuracy Comparison Across All Experiments",
+       x = "Model & Subset", y = "Test Accuracy") +
+  scale_fill_manual(values = c("Clinical"="red", "Genetic"="blue", "Combined"="green"))
+```
+
